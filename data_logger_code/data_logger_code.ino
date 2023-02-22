@@ -8,6 +8,7 @@
 #define DIV 4 //number of bit shifts for dividing by NUM_SAMPLES
 #define STRAIN_IN A1 //analog input A1 for strain gauge readings
 
+//test comment
 //settings for SPI for adxl363 accelerometer
 SPISettings adxl363(SPI_CLK, MSBFIRST, SPI_MODE0);
 
