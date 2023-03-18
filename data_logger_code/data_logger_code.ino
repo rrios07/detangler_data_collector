@@ -1,5 +1,5 @@
-#include <wire.h>
 #include <SPI.h>
+#include <string.h>
 #define EEPROM_ADDR 0x50 //101 0000
 #define SPI_CLK 8000000 // 8 MHz SPI clock
 #define ACC_CS_PIN 10
@@ -7,19 +7,30 @@
 #define INTR_CNT 976 //for 16 Hz with 1024 prescale and 16MHz clock
 #define NUM_SAMPLES 16
 #define DIV 4 //number of bit shifts for dividing by NUM_SAMPLES
-#define DATA_LEN 5 //length of each chunk of data we are writing to eeprom in bytes
+#define DATA_LEN 7 //length of each chunk of data we are writing to eeprom in bytes
 
-//test comment
+//struct for holding the 7 bytes of data per write
+struct __attribute__ ((packed)) data_block {
+  unsigned int tstamp : 8;
+  int xAccel : 12;
+  int yAccel : 12;
+  int zAccel : 12;
+  int strain : 12;
+};
+
 //settings for SPI for adxl363 accelerometer
 SPISettings adxl363(SPI_CLK, MSBFIRST, SPI_MODE0);
 SPISettings eeprom(SPI_CLK, MSBFIRST, SPI_MODE0);
 
 uint8_t sample_fl = 0;
+uint8_t wrap_fl = 0;
 uint8_t sample_cnt = 0;
 uin16_t max_accel = 0;
 uint16_t max_strain = 0;
-uint8_t timestamp = 0;
+uint8_t timestamp = 0; //global timestamp var
 uint32_t eeprom_addr = 0; //for addressing eeprom writes
+
+struct data_block block; 
 
 void setup() {
   // put your setup code here, to run once:
@@ -38,7 +49,6 @@ void setup() {
   OCR1A = INTR_CNT;//compare capture register value
   TIMSKI |= (1 << OCIE1A); //enable the interrupt
   sei(); //enable all interupts
-
 }
 
 /*
@@ -72,9 +82,20 @@ void loop() {
 //function to write accel data to the EEPROM
 void write_data(){
 
+  int i;
   uint8_t adr_l = eeprom_addr & 0xff;
   uint8_t adr_m = (eeprom_addr & 0xff00) >> 8;
-  uint8_t ard_h = (eeprom_addr & 0xff0000) >> 16;
+  uint8_t adr_h = (eeprom_addr & 0xff0000) >> 16;
+
+  uint8_t sbuf[DATA_LEN];
+
+  //sort out timestamp setup
+  block.tstamp = timestamp;
+  if(wrap_fl){
+    block.stamp |= 0x80; //flip MSB 
+  }
+
+  memcpy(sbuf, (uint8_t*) block, DATA_LEN);
 
   //enable writing to EEPROM
   SPI.beginTransaction(eeprom);
@@ -92,19 +113,17 @@ void write_data(){
   SPI.transfer(adr_l);
   SPI.transfer(adr_m);
   SPI.transfer(adr_h);
+
   //send data
-  SPI.transfer(timestamp);
-  SPI.transfer16(max_accel);
-  SPI.transfer16(max_strain);
+  for(i = 0; i < DATA_LEN; i++){
+    SPI.transfer(sbuf[i]);
+  }
   digitalWrite(EEP_CS_PIN, HIGH); //set chip select high
   SPI.endTransaction(eemprom);
 
   eeprom_addr += DATA_LEN;  //increment address 
   timestamp = (timestamp + 1) % 60; //increment timestamp; [0,59]
-  
-  //reset variables for next pass
-  cur_accel = 0;
-  cur_strain = 0;
+
 }
 
 //read the acceleration fron the 12-bit adc on the accelerometer
@@ -125,10 +144,7 @@ void read_strain(){
   SPI.endTransaction(adxl363);
   digitalWrite(ACC_CS_PIN, HIGH); //set chip select high
 
-
-  if(strain > max_strain){
-    max_strain = strain;
-  }
+  block.strain = strain & 0x0FFF;
 }
 
 //read acceleration values for x, y, and z via SPI interface. 
@@ -173,9 +189,7 @@ void read_accel(){
   SPI.endTransaction(adxl363);
   digitalWrite(ACC_CS_PIN, HIGH); //set chip select high
 
-
-  mag = sqrt(xtemp * xtemp + ytemp * ytemp + ztemp * ztemp);
-  if(mag > max_accel){
-    max_accel = mag;
-  }
+  block.xAccel = xtemp & 0x0fff;
+  block.yAccel = ytemp & 0x0fff;
+  block.zAccel = ztemp & 0x0fff;
 }
