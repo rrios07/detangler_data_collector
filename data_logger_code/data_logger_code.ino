@@ -3,11 +3,16 @@
 #define EEPROM_ADDR 0x50 //101 0000
 #define SPI_CLK 8000000 // 8 MHz SPI clock
 #define ACC_CS_PIN 10
-#define EEP_CS_PIN 9 //unsure of what this is for now
-#define INTR_CNT 976 //for 16 Hz with 1024 prescale and 16MHz clock
+#define EEP_CS_PIN 9 //unsure of what value this is for now
+#define AMP_SD_PIN A1
+#define LED_PIN ? //need to define what this is
+#define INTR_CNT 1552 //for 1 Hz with 1024 prescale and 16MHz clock
 #define NUM_SAMPLES 16
 #define DIV 4 //number of bit shifts for dividing by NUM_SAMPLES
 #define DATA_LEN 7 //length of each chunk of data we are writing to eeprom in bytes
+#define NUM_BLINKS 5 //how many times do we want startup LED to blink?
+#define PAGE_BOUNDARY 256
+#define MAX_AD 0x07ffff;
 
 //struct for holding the 7 bytes of data per write
 struct __attribute__ ((packed)) data_block {
@@ -37,8 +42,18 @@ void setup() {
 
   pinMode(ACC_CS_PIN, OUTPUT);
   pinMode(EEP_CS_PIN, OUTPUT);
+  pinMode(AMP_SD_PIN, OUTPUT);
+  digitalWrite(AMP_SD_PIN, HIGH); //enable the amp
   SPI.Begin();
 
+  //blink LED a NUM_BLINKS to indicate the device is powered on
+  PinMode(LED_PIN, OUTPUT);
+  for(int i = 0; i < NUM_BLINKS; i++){
+    digitalWrite(LED_PIN, HIGH);
+    delay(250);
+    digitalWrite(LED_PIN, LOW);
+    delay(150);
+  }
   //setup timer interrupts
   cli(); //disable all interrupts
   TCCR1A = 0;
@@ -54,7 +69,7 @@ void setup() {
 /*
 / This is the interrupt service routine for Timer1. The timer is set to operate at
 / 20Hz, so there should be no timing issues with the length of the ISR. The job of this ISR
-/ is to set a flag that allows the loop to pull
+/ is to set a flag that allows the loop to pull.
 */
 ISR(TIMER1_COMPA_vect){ 
 
@@ -74,7 +89,6 @@ void loop() {
 
   //all 20 samples obtained; write to EEPROM
   if(sample_cnt == NUM_SAMPLES){
-
     write_data();
   }
 }
@@ -83,9 +97,10 @@ void loop() {
 void write_data(){
 
   int i;
+  int overshoot;
   uint8_t adr_l = eeprom_addr & 0xff;
   uint8_t adr_m = (eeprom_addr & 0xff00) >> 8;
-  uint8_t adr_h = (eeprom_addr & 0xff0000) >> 16;
+  uint8_t adr_h = (eeprom_addr & 0x070000) >> 16;
 
   uint8_t sbuf[DATA_LEN];
 
@@ -117,13 +132,23 @@ void write_data(){
   //send data
   for(i = 0; i < DATA_LEN; i++){
     SPI.transfer(sbuf[i]);
+    eeprom_addr++;
   }
   digitalWrite(EEP_CS_PIN, HIGH); //set chip select high
   SPI.endTransaction(eemprom);
 
-  eeprom_addr += DATA_LEN;  //increment address 
-  timestamp = (timestamp + 1) % 60; //increment timestamp; [0,59]
+  //check address alignment with page and max addr
+  overshoot = eeprom_addr % PAGE_BOUNDARY;
+  if((overshoot < 7 && overshoot > 0){ //cross boundary condition
+    eeprom_addr += (7 - overshoot);    
+  }
 
+  if(eeprom_addr > MAX_AD){ //wrap around condition
+    eeprom_addr = 0;
+    wrap_fl = ~wrap_fl;
+  }
+
+  timestamp = (timestamp + 1) % 60; //increment timestamp; [0,59]
 }
 
 //read the acceleration fron the 12-bit adc on the accelerometer
